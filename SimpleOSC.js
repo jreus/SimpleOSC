@@ -10,17 +10,9 @@ software via websockets. There are two parts to the communication:
 
 /* USAGE:
 
-
-collection.entries = {}; // the Catalog contains a dictionary called entries
-entry = collection.entries["poetic-rhetoric"]; // entries contains an object for each catalog entry
-entry.text;
-entry.image;
-entry.tags; // is an array of arrays, each is one tag and its weight [tagname, tagweight]
-
-var num_clusters = 5;
-var measurement = measures.euclidean; // or another premade function, or one that is created on the fly
-
-collection.cluster(num_clusters, measurement);
+let osc = SimpleOSC("localhost", 8080);
+osc.init(function() { console.log("Connected"); });
+osc.sendmsg("/myosc/addr", [1, 2, 3.4, "hello"]);
 
 */
 
@@ -30,6 +22,8 @@ var SimpleOSC = function(host="127.0.0.1", port=8080, postFunc) {
   this.host = host;
   this.port = port;
   this.ws = null;
+  this.onMessage = null; // incoming OSC message responder
+  this.onConnect = null; // on WS successful connection callback
   this.socketURL = 'ws://'+this.host+":"+this.port+"/interface";
   if(postFunc == null) {
     this.post = console.log;
@@ -44,8 +38,35 @@ var SimpleOSC = function(host="127.0.0.1", port=8080, postFunc) {
 
 // *** INSTANCE METHODS ***
 // Connect via websockets to python server
-SimpleOSC.prototype.init = function (onConnectFunc) {
+SimpleOSC.prototype.init = function (onConnectFunc, onMessageFunc) {
   var self = this;
+
+  if(onMessageFunc == null) {
+    self.onMessage = function(msg) { // iterate through the json message and print it out
+      let it=1;
+      console.log("RECIEVED OSC", msg);
+      for (const key of Object.keys(msg)) {
+        if(it==1) {
+          self.post("received/\t" + key + ": " + msg[key]);
+          it=2;
+        } else {
+          if((it == 2) && (key == "args")) {// iterate through args
+            it=3;
+            let argstr = "\t\t" + key + ": ";
+            msg[key].forEach(function(arg,idx) {
+              argstr = argstr + (idx+1) + ":" + arg.type + "'" + arg.value + "' ";
+            });
+            self.post(argstr);
+          } else {
+            self.post("\t\t" + key + ": " + msg[key]);
+          }
+        }
+      }
+      if(it==1) { self.post("received/\t" + "EMPTY") }
+    }
+  } else {
+    self.onMessage = onMessageFunc;
+  }
 
   if(onConnectFunc == null) {
     self.onConnect = function() { self.sendmsg("/browser/status", ["Hello from the browser", 57120, 42.24]) };
@@ -65,29 +86,9 @@ SimpleOSC.prototype.init = function (onConnectFunc) {
   };
 
   self.ws.onmessage = function(evt) {
-    var str = evt.data; // messages must be valid json
-    var msg = JSON.parse(str);
-    var it=1;
-
-    // just iterate through the json message
-    for (const key of Object.keys(msg)) {
-      if(it==1) {
-        self.post("received/\t" + key + ": " + msg[key]);
-        it=2;
-      } else {
-        if((it == 2) && (key == "args")) {// iterate through args
-          it=3;
-          var argstr = "\t\t" + key + ": ";
-          msg[key].forEach(function(arg,idx) {
-            argstr = argstr + (idx+1) + ":" + arg.type + "'" + arg.value + "' ";
-          });
-          self.post(argstr);
-        } else {
-          self.post("\t\t" + key + ": " + msg[key]);
-        }
-      }
-    }
-    if(it==1) { self.post("received/\t" + "EMPTY") }
+    let str = evt.data; // messages must be valid json
+    let msg = JSON.parse(str);
+    self.onMessage(msg);
   };
 
   self.ws.onclose = function() {
